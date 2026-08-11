@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Regex NFA Visualizer // regex-visualizer.slippylabs.com</title>
+<meta name="description" content="Compile a regular expression into a Thompson NFA, draw the state machine, and step a test string through it watching the active state set move.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2234%22%20r%3D%2222%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2220%22%20cy%3D%2216%22%20r%3D%228%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2244%22%20cy%3D%2216%22%20r%3D%228%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3C%2Fsvg%3E">
+<meta name="theme-color" content="#050b10">
+<link rel="stylesheet" href="style.css?v=5">
+</head>
+<body>
+
+<div class="starfield"></div>
+<div class="scanlines"></div>
+
+<main class="page-wrap">
+  <div class="hud-panel wide">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div class="callsign-row">
+      <div class="toad-avatar-wrap">
+        <svg class="toad-avatar" width="46" height="46" viewBox="0 0 64 64">
+          <circle cx="32" cy="34" r="22" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="44" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="3.5" fill="#050b10"/>
+          <circle cx="44" cy="16" r="3.5" fill="#050b10"/>
+          <ellipse cx="24" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <ellipse cx="40" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <circle cx="24" cy="30" r="1.4" fill="#39ff8f"/>
+          <circle cx="40" cy="30" r="1.4" fill="#39ff8f"/>
+          <path d="M22 42 Q32 48 42 42" stroke="#050b10" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+        <div class="lock-reticle"></div>
+      </div>
+      <span class="callsign">Workshop Division // Tool</span>
+      <div class="nav-links">
+        <a href="https://projects.slippylabs.com/" class="logout-link">&larr; Archive</a>
+      </div>
+    </div>
+
+    <h1>REGEX VISUALIZER</h1>
+    <p class="subtitle">See what a regular expression actually is — a machine. Type a pattern, watch it compile into a state graph, then step a string through it one character at a time.</p>
+
+    <div class="two-col">
+      <div class="tool-field-row">
+        <label class="tool-field-label" for="pattern-input">Pattern</label>
+        <input class="tool-text-input" id="pattern-input" type="text" spellcheck="false" autocomplete="off" value="(ab|a)*c">
+      </div>
+      <div class="tool-field-row">
+        <label class="tool-field-label" for="subject-input">Test string</label>
+        <input class="tool-text-input" id="subject-input" type="text" spellcheck="false" autocomplete="off" value="ababac">
+      </div>
+    </div>
+
+    <div class="tool-controls">
+      <button class="tool-btn" id="step-btn">Step</button>
+      <button class="tool-btn" id="run-btn">Run</button>
+      <button class="tool-btn ghost" id="reset-btn">Reset</button>
+      <button class="tool-btn ghost preset" data-p="a(b|c)*d" data-s="abcbcd">a(b|c)*d</button>
+      <button class="tool-btn ghost preset" data-p="[a-z]+[0-9]?" data-s="slippy6">[a-z]+[0-9]?</button>
+      <button class="tool-btn ghost preset" data-p="(a|b){2,3}" data-s="aba">(a|b){2,3}</button>
+      <button class="tool-btn ghost preset" data-p="\d{3}-\d{4}" data-s="555-0164">\d{3}-\d{4}</button>
+    </div>
+
+    <p class="tool-output error-text hidden" id="regex-error"></p>
+
+    <div class="tape" id="tape"></div>
+
+    <div class="stat-grid">
+      <div class="stat-tile"><span class="stat-value" id="stat-states">0</span><span class="stat-label">NFA States</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-active">0</span><span class="stat-label">Active Now</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-pos">0</span><span class="stat-label">Position</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-verdict">&mdash;</span><span class="stat-label">Full Match</span></div>
+    </div>
+
+    <canvas class="nfa-canvas" id="nfa"></canvas>
+
+    <p class="tool-output" id="explain" style="min-height:auto"></p>
+
+    <p class="tool-note">This builds a Thompson NFA: every construct becomes a little sub-machine wired together with epsilon transitions (drawn as <strong>&epsilon;</strong>), which is why the state count grows faster than the pattern length. Simulation tracks the whole set of states the machine could be in at once &mdash; that set is the reason an NFA needs no backtracking. Matching is anchored at both ends, as if the pattern were wrapped in <code>^(?:…)$</code>, and every verdict is cross-checked against the browser's own regex engine; the two must agree. Supported: literals, <code>.</code>, character classes with ranges and negation, <code>\d \w \s \D \W \S</code>, groups, alternation, <code>* + ?</code> and <code>{n,m}</code>. Backreferences, lookaround and lazy quantifiers are not &mdash; they are exactly the features a plain NFA cannot express.</p>
+
+    <div class="comm-window">
+      <div class="comm-portrait">
+        <svg width="36" height="36" viewBox="0 0 64 64">
+          <circle cx="32" cy="34" r="22" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="44" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="3.5" fill="#050b10"/>
+          <circle cx="44" cy="16" r="3.5" fill="#050b10"/>
+          <ellipse cx="24" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <ellipse cx="40" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <circle cx="24" cy="30" r="1.4" fill="#39ff8f"/>
+          <circle cx="40" cy="30" r="1.4" fill="#39ff8f"/>
+          <path d="M22 42 Q32 48 42 42" stroke="#050b10" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="comm-body">
+        <div class="comm-label"><span class="dot"></span> Incoming Transmission &mdash; Slippy</div>
+        <p>"A regex is not magic. It is a very small machine that only knows where it currently is."</p>
+      </div>
+    </div>
+
+    <a href="https://projects.slippylabs.com/" class="hud-btn">&larr; Back to Archive</a>
+  </div>
+</main>
+
+<script>
+const MAX_REPEAT = 20;
+const MAX_STATES = 400;
+const MAX_DRAW_STATES = 130;
+
+// ------------------------------------------------------------------ parser
+function parse(src) {
+  let i = 0;
+
+  function peek() { return src[i]; }
+  function eat(ch) {
+    if (src[i] !== ch) throw new Error('Expected "' + ch + '" at position ' + i);
+    i++;
+  }
+
+  function parseAlt() {
+    const branches = [parseConcat()];
+    while (src[i] === '|') { i++; branches.push(parseConcat()); }
+    return branches.length === 1 ? branches[0] : { type: 'alt', branches: branches };
+  }
+
+  function parseConcat() {
+    const items = [];
+    while (i < src.length && src[i] !== '|' && src[i] !== ')') items.push(parseRepeat());
+    if (!items.length) return { type: 'empty' };
+    return items.length === 1 ? items[0] : { type: 'concat', items: items };
+  }
+
+  function parseRepeat() {
+    let node = parseAtom();
+    for (;;) {
+      const c = src[i];
+      if (c === '*') { i++; node = { type: 'star', node: node }; }
+      else if (c === '+') { i++; node = { type: 'plus', node: node }; }
+      else if (c === '?') { i++; node = { type: 'opt', node: node }; }
+      else if (c === '{') {
+        const close = src.indexOf('}', i);
+        const body = close === -1 ? null : src.slice(i + 1, close);
+        if (body === null || !/^\d+(,\d*)?$/.test(body)) break; // a literal brace
+        i = close + 1;
+        const parts = body.split(',');
+        const min = parseInt(parts[0], 10);
+        const max = parts.length === 1 ? min : (parts[1] === '' ? Infinity : parseInt(parts[1], 10));
+        if (min > MAX_REPEAT || (max !== Infinity && max > MAX_REPEAT)) {
+          throw new Error('Repetition counts above ' + MAX_REPEAT + ' would build a graph too large to draw.');
+        }
+        if (max < min) throw new Error('{' + body + '} counts down, which cannot match anything.');
+        node = { type: 'repeat', node: node, min: min, max: max };
+      } else break;
+    }
+    return node;
+  }
+
+  const CLASS_SHORTHAND = {
+    d: { name: '\\d', test: (c) => c >= '0' && c <= '9' },
+    D: { name: '\\D', test: (c) => !(c >= '0' && c <= '9') },
+    w: { name: '\\w', test: (c) => /[A-Za-z0-9_]/.test(c) },
+    W: { name: '\\W', test: (c) => !/[A-Za-z0-9_]/.test(c) },
+    s: { name: '\\s', test: (c) => /\s/.test(c) },
+    S: { name: '\\S', test: (c) => !/\s/.test(c) },
+  };
+  const ESCAPES = { n: '\n', t: '\t', r: '\r', f: '\f', v: '\v', 0: '\0' };
+
+  function readEscape() {
+    const c = src[i++];
+    if (c === undefined) throw new Error('Pattern ends with a dangling backslash.');
+    if (CLASS_SHORTHAND[c]) return { shorthand: CLASS_SHORTHAND[c] };
+    if (ESCAPES[c] !== undefined) return { char: ESCAPES[c] };
+    return { char: c };
+  }
+
+  function parseClass() {
+    eat('[');
+    const neg = src[i] === '^';
+    if (neg) i++;
+    const ranges = [];
+    const shorthands = [];
+    let first = true;
+    while (i < src.length && (src[i] !== ']' || first)) {
+      first = false;
+      let lo;
+      if (src[i] === '\\') { i++; const e = readEscape(); if (e.shorthand) { shorthands.push(e.shorthand); continue; } lo = e.char; }
+      else lo = src[i++];
+      if (src[i] === '-' && src[i + 1] !== undefined && src[i + 1] !== ']') {
+        i++;
+        let hi;
+        if (src[i] === '\\') { i++; const e = readEscape(); hi = e.shorthand ? lo : e.char; }
+        else hi = src[i++];
+        if (hi < lo) throw new Error('Range ' + lo + '-' + hi + ' runs backwards.');
+        ranges.push([lo, hi]);
+      } else {
+        ranges.push([lo, lo]);
+      }
+    }
+    if (src[i] !== ']') throw new Error('Unclosed character class.');
+    i++;
+    return { type: 'class', neg: neg, ranges: ranges, shorthands: shorthands };
+  }
+
+  function parseAtom() {
+    const c = src[i];
+    if (c === undefined) throw new Error('Pattern ended unexpectedly.');
+    if (c === '(') {
+      i++;
+      if (src.startsWith('?:', i)) i += 2;
+      else if (src[i] === '?') throw new Error('Lookaround and named groups are not supported — a plain NFA cannot express them.');
+      const inner = parseAlt();
+      eat(')');
+      return inner;
+    }
+    if (c === '[') return parseClass();
+    if (c === '.') { i++; return { type: 'any' }; }
+    if (c === '\\') {
+      i++;
+      const e = readEscape();
+      if (e.shorthand) return { type: 'class', neg: false, ranges: [], shorthands: [e.shorthand] };
+      return { type: 'char', char: e.char };
+    }
+    if (c === '^' || c === '$') throw new Error('Anchors are implicit here — the whole string must match.');
+    if (c === '*' || c === '+' || c === '?') throw new Error('"' + c + '" has nothing to repeat.');
+    i++;
+    return { type: 'char', char: c };
+  }
+
+  const ast = parseAlt();
+  if (i < src.length) throw new Error('Unexpected "' + src[i] + '" at position ' + i + '.');
+  return ast;
+}
+
+// -------------------------------------------------------- Thompson NFA build
+function buildNfa(ast) {
+  const states = [];
+  function newState() { states.push({ id: states.length, edges: [] }); return states.length - 1; }
+  function link(from, to, label) { states[from].edges.push({ to: to, label: label }); }
+
+  function build(node) {
+    if (states.length > MAX_STATES) throw new Error('This pattern needs more than ' + MAX_STATES + ' states.');
+    switch (node.type) {
+      case 'empty': {
+        const s = newState(), e = newState();
+        link(s, e, null);
+        return { start: s, end: e };
+      }
+      case 'char': {
+        const s = newState(), e = newState();
+        link(s, e, { kind: 'char', char: node.char });
+        return { start: s, end: e };
+      }
+      case 'any': {
+        const s = newState(), e = newState();
+        link(s, e, { kind: 'any' });
+        return { start: s, end: e };
+      }
+      case 'class': {
+        const s = newState(), e = newState();
+        link(s, e, { kind: 'class', neg: node.neg, ranges: node.ranges, shorthands: node.shorthands });
+        return { start: s, end: e };
+      }
+      case 'concat': {
+        let frag = build(node.items[0]);
+        for (let k = 1; k < node.items.length; k++) {
+          const next = build(node.items[k]);
+          link(frag.end, next.start, null);
+          frag = { start: frag.start, end: next.end };
+        }
+        return frag;
+      }
+      case 'alt': {
+        const s = newState(), e = newState();
+        for (const b of node.branches) {
+          const f = build(b);
+          link(s, f.start, null);
+          link(f.end, e, null);
+        }
+        return { start: s, end: e };
+      }
+      case 'star': {
+        const s = newState(), e = newState();
+        const f = build(node.node);
+        link(s, f.start, null);
+        link(s, e, null);
+        link(f.end, f.start, null);
+        link(f.end, e, null);
+        return { start: s, end: e };
+      }
+      case 'plus': {
+        const s = newState(), e = newState();
+        const f = build(node.node);
+        link(s, f.start, null);
+        link(f.end, f.start, null);
+        link(f.end, e, null);
+        return { start: s, end: e };
+      }
+      case 'opt': {
+        const s = newState(), e = newState();
+        const f = build(node.node);
+        link(s, f.start, null);
+        link(s, e, null);
+        link(f.end, e, null);
+        return { start: s, end: e };
+      }
+      case 'repeat': {
+        // {n,m} is just n copies, then optional copies (or a star for {n,}).
+        const parts = [];
+        for (let k = 0; k < node.min; k++) parts.push(node.node);
+        let frag = null;
+        for (const p of parts) {
+          const f = build(p);
+          if (frag) link(frag.end, f.start, null);
+          frag = frag ? { start: frag.start, end: f.end } : f;
+        }
+        if (!frag) { const s = newState(), e = newState(); link(s, e, null); frag = { start: s, end: e }; }
+        if (node.max === Infinity) {
+          const tail = build({ type: 'star', node: node.node });
+          link(frag.end, tail.start, null);
+          return { start: frag.start, end: tail.end };
+        }
+        for (let k = node.min; k < node.max; k++) {
+          const tail = build({ type: 'opt', node: node.node });
+          link(frag.end, tail.start, null);
+          frag = { start: frag.start, end: tail.end };
+        }
+        return frag;
+      }
+      default:
+        throw new Error('Unsupported node ' + node.type);
+    }
+  }
+
+  const frag = build(ast);
+  return { states: states, start: frag.start, accept: frag.end };
+}
+
+function labelMatches(label, ch) {
+  if (!label) return false;
+  if (label.kind === 'char') return ch === label.char;
+  if (label.kind === 'any') return ch !== '\n';
+  if (label.kind === 'class') {
+    let hit = label.ranges.some(([lo, hi]) => ch >= lo && ch <= hi) ||
+              label.shorthands.some(s => s.test(ch));
+    return label.neg ? !hit : hit;
+  }
+  return false;
+}
+
+function labelText(label) {
+  if (!label) return 'ε';
+  if (label.kind === 'char') {
+    const map = { '\n': '\\n', '\t': '\\t', '\r': '\\r', ' ': '␣' };
+    return map[label.char] || label.char;
+  }
+  if (label.kind === 'any') return '.';
+  const bits = label.ranges.map(([lo, hi]) => lo === hi ? lo : lo + '-' + hi)
+    .concat(label.shorthands.map(s => s.name));
+  return '[' + (label.neg ? '^' : '') + bits.join('') + ']';
+}
+
+function epsilonClosure(nfa, set) {
+  const out = new Set(set);
+  const stack = Array.from(set);
+  while (stack.length) {
+    const s = stack.pop();
+    for (const edge of nfa.states[s].edges) {
+      if (edge.label === null && !out.has(edge.to)) { out.add(edge.to); stack.push(edge.to); }
+    }
+  }
+  return out;
+}
+
+function stepSet(nfa, set, ch) {
+  const moved = new Set();
+  for (const s of set) {
+    for (const edge of nfa.states[s].edges) {
+      if (labelMatches(edge.label, ch)) moved.add(edge.to);
+    }
+  }
+  return epsilonClosure(nfa, moved);
+}
+
+function fullMatch(nfa, subject) {
+  let set = epsilonClosure(nfa, [nfa.start]);
+  for (const ch of subject) {
+    set = stepSet(nfa, set, ch);
+    if (!set.size) return false;
+  }
+  return set.has(nfa.accept);
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { parse: parse, buildNfa: buildNfa, fullMatch: fullMatch };
+}
+
+// ----------------------------------------------------------------- the page
+const patternInput = document.getElementById('pattern-input');
+const subjectInput = document.getElementById('subject-input');
+const regexError = document.getElementById('regex-error');
+const explain = document.getElementById('explain');
+const canvas = document.getElementById('nfa');
+const ctx = canvas.getContext('2d');
+
+let nfa = null;
+let active = new Set();
+let pos = 0;
+let layout = null;
+
+function compile() {
+  regexError.classList.add('hidden');
+  try {
+    nfa = buildNfa(parse(patternInput.value));
+  } catch (err) {
+    nfa = null;
+    regexError.textContent = err.message;
+    regexError.classList.remove('hidden');
+    document.getElementById('stat-states').textContent = '0';
+    draw();
+    return false;
+  }
+  document.getElementById('stat-states').textContent = String(nfa.states.length);
+  buildLayout();
+  reset();
+  return true;
+}
+
+function reset() {
+  pos = 0;
+  active = nfa ? epsilonClosure(nfa, [nfa.start]) : new Set();
+  refresh();
+}
+
+function step() {
+  if (!nfa) return;
+  const subject = subjectInput.value;
+  if (pos >= subject.length) return;
+  active = stepSet(nfa, active, subject[pos]);
+  pos++;
+  refresh();
+}
+
+function runAll() {
+  if (!nfa) return;
+  while (pos < subjectInput.value.length && active.size) step();
+  refresh();
+}
+
+function refresh() {
+  const subject = subjectInput.value;
+  document.getElementById('stat-active').textContent = String(active.size);
+  document.getElementById('stat-pos').textContent = pos + ' / ' + subject.length;
+
+  const tape = document.getElementById('tape');
+  tape.textContent = '';
+  if (!subject.length) {
+    const cell = document.createElement('span');
+    cell.className = 'tape-cell';
+    cell.textContent = '(empty string)';
+    tape.appendChild(cell);
+  }
+  Array.from(subject).forEach((ch, i) => {
+    const cell = document.createElement('span');
+    cell.className = 'tape-cell' + (i < pos ? ' done' : i === pos ? ' current' : '');
+    cell.textContent = ch === ' ' ? '␣' : ch;
+    tape.appendChild(cell);
+  });
+
+  const verdictEl = document.getElementById('stat-verdict');
+  if (!nfa) {
+    verdictEl.textContent = '—';
+    explain.textContent = '';
+    draw();
+    return;
+  }
+
+  const mine = fullMatch(nfa, subject);
+  // Cross-check against the engine already sitting in the browser.
+  let theirs = null;
+  try {
+    theirs = new RegExp('^(?:' + patternInput.value + ')$').test(subject);
+  } catch (err) {
+    theirs = null;
+  }
+  verdictEl.textContent = mine ? 'yes' : 'no';
+  verdictEl.style.color = mine ? 'var(--hud-green)' : 'var(--hud-red)';
+
+  let msg = mine
+    ? 'The machine can finish on the accepting state, so the whole string matches.'
+    : 'No path reaches the accepting state with the whole string consumed.';
+  if (theirs === null) {
+    msg += ' (The browser refused this pattern, so there is nothing to compare against.)';
+  } else if (theirs !== mine) {
+    msg += ' ⚠ The browser\'s own engine disagrees — that is a bug in this tool, not in your pattern.';
+    explain.classList.add('error-text');
+  } else {
+    msg += ' The browser\'s engine agrees.';
+    explain.classList.remove('error-text');
+  }
+  if (pos < subject.length && !active.size) {
+    msg += ' The active set went empty at position ' + pos + ', so stepping stops there.';
+  }
+  explain.textContent = msg;
+  draw();
+}
+
+function buildLayout() {
+  if (!nfa) { layout = null; return; }
+  const n = nfa.states.length;
+  const depth = new Array(n).fill(-1);
+  depth[nfa.start] = 0;
+  const queue = [nfa.start];
+  while (queue.length) {
+    const s = queue.shift();
+    for (const e of nfa.states[s].edges) {
+      if (depth[e.to] === -1) { depth[e.to] = depth[s] + 1; queue.push(e.to); }
+    }
+  }
+  for (let i = 0; i < n; i++) if (depth[i] === -1) depth[i] = 0;
+  // The accepting state belongs on the right regardless of BFS depth.
+  const maxDepth = Math.max(...depth);
+  depth[nfa.accept] = maxDepth;
+
+  const columns = new Map();
+  for (let i = 0; i < n; i++) {
+    if (!columns.has(depth[i])) columns.set(depth[i], []);
+    columns.get(depth[i]).push(i);
+  }
+  layout = { depth: depth, columns: columns, maxDepth: maxDepth };
+}
+
+function sizeCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 800;
+  const h = canvas.clientHeight || 380;
+  if (canvas.width !== Math.round(w * ratio) || canvas.height !== Math.round(h * ratio)) {
+    canvas.width = Math.round(w * ratio);
+    canvas.height = Math.round(h * ratio);
+  }
+  return ratio;
+}
+
+function draw() {
+  const ratio = sizeCanvas();
+  const W = canvas.width, H = canvas.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#050b10';
+  ctx.fillRect(0, 0, W, H);
+  if (!nfa || !layout) return;
+
+  ctx.scale(ratio, ratio);
+  const w = W / ratio, h = H / ratio;
+
+  if (nfa.states.length > MAX_DRAW_STATES) {
+    ctx.fillStyle = '#7fa695';
+    ctx.font = '13px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(nfa.states.length + ' states — too many to draw legibly.', w / 2, h / 2 - 8);
+    ctx.fillText('Simulation and the verdict above still work.', w / 2, h / 2 + 12);
+    return;
+  }
+
+  const margin = 34;
+  const cols = layout.maxDepth + 1;
+  const colGap = cols > 1 ? (w - margin * 2) / (cols - 1) : 0;
+  const r = Math.max(7, Math.min(15, 320 / Math.max(8, nfa.states.length)));
+
+  const pt = (id) => {
+    const d = layout.depth[id];
+    const col = layout.columns.get(d);
+    const k = col.indexOf(id);
+    const x = margin + d * colGap;
+    const y = col.length === 1 ? h / 2 : margin + (k / (col.length - 1)) * (h - margin * 2);
+    return { x: x, y: y };
+  };
+
+  // edges first so nodes sit on top
+  for (let i = 0; i < nfa.states.length; i++) {
+    const a = pt(i);
+    for (const e of nfa.states[i].edges) {
+      const b = pt(e.to);
+      const isEps = e.label === null;
+      ctx.strokeStyle = isEps ? 'rgba(127,166,149,0.35)' : 'rgba(57,255,143,0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (e.to === i) {
+        ctx.arc(a.x, a.y - r, r * 0.85, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2 - Math.min(40, Math.abs(b.x - a.x) * 0.25 + 12);
+        ctx.moveTo(a.x, a.y);
+        ctx.quadraticCurveTo(mx, my, b.x, b.y);
+        ctx.stroke();
+        // arrowhead
+        const ang = Math.atan2(b.y - my, b.x - mx);
+        ctx.beginPath();
+        ctx.moveTo(b.x - r * Math.cos(ang), b.y - r * Math.sin(ang));
+        ctx.lineTo(b.x - (r + 7) * Math.cos(ang - 0.4), b.y - (r + 7) * Math.sin(ang - 0.4));
+        ctx.lineTo(b.x - (r + 7) * Math.cos(ang + 0.4), b.y - (r + 7) * Math.sin(ang + 0.4));
+        ctx.closePath();
+        ctx.fillStyle = isEps ? 'rgba(127,166,149,0.4)' : 'rgba(57,255,143,0.6)';
+        ctx.fill();
+
+        ctx.fillStyle = isEps ? '#7fa695' : '#39ff8f';
+        ctx.font = (isEps ? '10px' : 'bold 11px') + ' Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(labelText(e.label), (a.x + mx * 2 + b.x) / 4, (a.y + my * 2 + b.y) / 4 - 3);
+      }
+    }
+  }
+
+  for (let i = 0; i < nfa.states.length; i++) {
+    const p = pt(i);
+    const isActive = active.has(i);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = isActive ? 'rgba(57,255,143,0.85)' : 'rgba(5,11,16,0.95)';
+    ctx.fill();
+    ctx.lineWidth = i === nfa.accept ? 2.5 : 1.2;
+    ctx.strokeStyle = i === nfa.accept ? '#ff9130' : i === nfa.start ? '#39ff8f' : 'rgba(57,255,143,0.45)';
+    ctx.stroke();
+    if (i === nfa.accept) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 3.5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ff9130';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    if (r >= 10) {
+      ctx.fillStyle = isActive ? '#050b10' : '#7fa695';
+      ctx.font = '9px Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(i), p.x, p.y);
+      ctx.textBaseline = 'alphabetic';
+    }
+  }
+}
+
+patternInput.addEventListener('input', compile);
+subjectInput.addEventListener('input', () => { if (nfa) reset(); });
+document.getElementById('step-btn').addEventListener('click', step);
+document.getElementById('run-btn').addEventListener('click', runAll);
+document.getElementById('reset-btn').addEventListener('click', reset);
+document.querySelectorAll('.preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    patternInput.value = btn.dataset.p;
+    subjectInput.value = btn.dataset.s;
+    compile();
+  });
+});
+window.addEventListener('resize', draw);
+
+compile();
+</script>
+</body>
+</html>
